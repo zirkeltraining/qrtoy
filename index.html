@@ -33,6 +33,21 @@
       grid-template-rows: 3fr 1fr;
       gap: 10px;
       padding: 10px;
+      position: relative;
+    }
+
+    .title-line {
+      position: absolute;
+      top: 2px;
+      left: 0;
+      right: 0;
+      text-align: center;
+      font-size: 0.62rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: rgba(244, 247, 251, 0.38);
+      pointer-events: none;
+      z-index: 20;
     }
 
     .top {
@@ -105,6 +120,13 @@
       display: block;
       transform-origin: center center;
       transition: transform 120ms linear;
+    }
+
+    .flash-overlay {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      z-index: 4;
     }
 
     .controls {
@@ -194,6 +216,7 @@
 </head>
 <body>
   <div class="app">
+    <div class="title-line">QRTOY V0.1 BY MAX</div>
     <section class="top">
       <iframe id="viewer" title="QR target"></iframe>
       <div class="overlay" id="startOverlay">
@@ -212,6 +235,7 @@
     <section class="camera">
       <div class="error" id="errorBox"></div>
       <video id="video" autoplay playsinline muted></video>
+      <canvas id="flashCanvas" class="flash-overlay"></canvas>
       <div class="controls">
         <div class="camera-controls">
           <button id="cameraBtn" aria-label="Select camera">🔄</button>
@@ -241,7 +265,8 @@
       zoomLabel: document.getElementById('zoomLabel'),
       cameraBtn: document.getElementById('cameraBtn'),
       errorBox: document.getElementById('errorBox'),
-      scanCanvas: document.getElementById('scanCanvas')
+      scanCanvas: document.getElementById('scanCanvas'),
+      flashCanvas: document.getElementById('flashCanvas')
     };
 
     const state = {
@@ -266,7 +291,10 @@
       duplicateSeenAt: null,
       lastDetectedData: null,
       scanLoopId: null,
-      decoding: false
+      decoding: false,
+      feedbackUntil: 0,
+      audioCtx: null,
+      audioReady: false
     };
 
     function detectLanguage(supported) {
@@ -299,6 +327,90 @@
 
     function clearError() {
       els.errorBox.style.display = 'none';
+    }
+
+    function ensureFeedbackCanvasSize() {
+      const rect = els.video.getBoundingClientRect();
+      const dpr = Math.max(1, window.devicePixelRatio || 1);
+      const targetW = Math.max(1, Math.floor(rect.width * dpr));
+      const targetH = Math.max(1, Math.floor(rect.height * dpr));
+      if (els.flashCanvas.width !== targetW || els.flashCanvas.height !== targetH) {
+        els.flashCanvas.width = targetW;
+        els.flashCanvas.height = targetH;
+      }
+    }
+
+    function unlockAudio() {
+      if (!state.audioCtx) {
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        if (!Ctx) return;
+        state.audioCtx = new Ctx();
+      }
+      state.audioCtx.resume().then(() => {
+        state.audioReady = true;
+      }).catch(() => {});
+    }
+
+    function playShutterSound() {
+      if (!state.audioCtx || !state.audioReady) return;
+      const ctx = state.audioCtx;
+      const now = ctx.currentTime;
+      const gain = ctx.createGain();
+      const osc = ctx.createOscillator();
+      const noiseBuffer = ctx.createBuffer(1, Math.floor(ctx.sampleRate * 0.03), ctx.sampleRate);
+      const noiseData = noiseBuffer.getChannelData(0);
+      for (let i = 0; i < noiseData.length; i += 1) noiseData[i] = (Math.random() * 2) - 1;
+      const noise = ctx.createBufferSource();
+      const noiseGain = ctx.createGain();
+
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(1200, now);
+      osc.frequency.exponentialRampToValueAtTime(220, now + 0.06);
+
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.exponentialRampToValueAtTime(0.16, now + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.09);
+
+      noise.buffer = noiseBuffer;
+      noiseGain.gain.setValueAtTime(0.09, now);
+      noiseGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.035);
+
+      osc.connect(gain).connect(ctx.destination);
+      noise.connect(noiseGain).connect(ctx.destination);
+      osc.start(now);
+      osc.stop(now + 0.1);
+      noise.start(now);
+      noise.stop(now + 0.04);
+    }
+
+    function drawFeedbackPolygon(points) {
+      if (!points || points.length < 4) return;
+      ensureFeedbackCanvasSize();
+      const ctx = els.flashCanvas.getContext('2d');
+      const w = els.flashCanvas.width;
+      const h = els.flashCanvas.height;
+      const dpr = Math.max(1, window.devicePixelRatio || 1);
+      const sx = w / dpr;
+      const sy = h / dpr;
+      ctx.clearRect(0, 0, w, h);
+      ctx.fillStyle = 'rgba(255,255,255,0.55)';
+      ctx.beginPath();
+      for (let i = 0; i < points.length; i += 1) {
+        const px = (points[i].x / els.video.videoWidth) * sx * dpr;
+        const py = (points[i].y / els.video.videoHeight) * sy * dpr;
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.closePath();
+      ctx.fill();
+      state.feedbackUntil = performance.now() + 110;
+      playShutterSound();
+    }
+
+    function renderFeedback() {
+      if (performance.now() <= state.feedbackUntil) return;
+      const ctx = els.flashCanvas.getContext('2d');
+      ctx.clearRect(0, 0, els.flashCanvas.width, els.flashCanvas.height);
     }
 
     function setZoom(next) {
@@ -389,7 +501,7 @@
     }
 
     function handleQrText(raw) {
-      if (!isValidHttpUrl(raw)) return;
+      if (!isValidHttpUrl(raw)) return false;
 
       if (state.lastLoadedUrl === raw) {
         if (!state.duplicateSeenAt) state.duplicateSeenAt = performance.now();
@@ -397,10 +509,11 @@
         if (elapsed >= 2000) {
           els.reloadCta.classList.add('show');
         }
-        return;
+        return false;
       }
 
       loadUrl(raw, false);
+      return true;
     }
 
     async function scanLoop() {
@@ -429,20 +542,39 @@
         ctx.drawImage(els.video, sx, sy, cropW, cropH, 0, 0, cropW, cropH);
 
         let raw = '';
+        let points = null;
         if (state.detectorMode === 'native' && state.detector) {
           const box = await state.detector.detect(canvas);
-          if (box.length) raw = box[0].rawValue || '';
+          if (box.length) {
+            raw = box[0].rawValue || '';
+            if (box[0].cornerPoints && box[0].cornerPoints.length === 4) {
+              points = box[0].cornerPoints;
+            }
+          }
         } else if (state.detectorMode === 'jsqr' && typeof window.jsQR === 'function') {
           const imageData = ctx.getImageData(0, 0, cropW, cropH);
           const result = window.jsQR(imageData.data, cropW, cropH, {
             inversionAttempts: 'attemptBoth'
           });
-          if (result && result.data) raw = result.data;
+          if (result && result.data) {
+            raw = result.data;
+            if (result.location) {
+              const mapX = p => sx + p.x;
+              const mapY = p => sy + p.y;
+              points = [
+                { x: mapX(result.location.topLeftCorner), y: mapY(result.location.topLeftCorner) },
+                { x: mapX(result.location.topRightCorner), y: mapY(result.location.topRightCorner) },
+                { x: mapX(result.location.bottomRightCorner), y: mapY(result.location.bottomRightCorner) },
+                { x: mapX(result.location.bottomLeftCorner), y: mapY(result.location.bottomLeftCorner) }
+              ];
+            }
+          }
         }
 
         if (raw) {
           state.lastDetectedData = raw;
-          handleQrText(raw);
+          const didStartLoad = handleQrText(raw);
+          if (didStartLoad && points) drawFeedbackPolygon(points);
         } else {
           state.duplicateSeenAt = null;
           if (!state.scannedOnce) {
@@ -452,6 +584,7 @@
       } catch (_) {
         // Ignore intermittent decode issues.
       } finally {
+        renderFeedback();
         state.decoding = false;
         state.scanLoopId = requestAnimationFrame(scanLoop);
       }
@@ -464,6 +597,8 @@
       els.zoomIn.addEventListener('click', () => setZoom(state.zoom + state.zoomStep));
       els.zoomOut.addEventListener('click', () => setZoom(state.zoom - state.zoomStep));
       els.cameraBtn.addEventListener('click', switchCamera);
+      window.addEventListener('pointerdown', unlockAudio, { once: true });
+      window.addEventListener('touchstart', unlockAudio, { once: true });
       els.reloadBtn.addEventListener('click', () => {
         if (state.lastLoadedUrl) loadUrl(state.lastLoadedUrl, true);
       });
