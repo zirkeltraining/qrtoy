@@ -227,6 +227,7 @@
 
   <canvas id="scanCanvas"></canvas>
 
+  <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
   <script>
     const els = {
       video: document.getElementById('video'),
@@ -259,6 +260,7 @@
       zoomMax: 3,
       zoomStep: 0.1,
       detector: null,
+      detectorMode: null,
       scannedOnce: false,
       lastLoadedUrl: null,
       duplicateSeenAt: null,
@@ -366,8 +368,13 @@
         const supported = await window.BarcodeDetector.getSupportedFormats();
         if (supported.includes('qr_code')) {
           state.detector = new window.BarcodeDetector({ formats: ['qr_code'] });
+          state.detectorMode = 'native';
           return;
         }
+      }
+      if (typeof window.jsQR === 'function') {
+        state.detectorMode = 'jsqr';
+        return;
       }
       throw new Error('no-qr');
     }
@@ -421,9 +428,19 @@
         canvas.height = cropH;
         ctx.drawImage(els.video, sx, sy, cropW, cropH, 0, 0, cropW, cropH);
 
-        const box = state.detector ? await state.detector.detect(canvas) : [];
-        if (box.length) {
-          const raw = box[0].rawValue || '';
+        let raw = '';
+        if (state.detectorMode === 'native' && state.detector) {
+          const box = await state.detector.detect(canvas);
+          if (box.length) raw = box[0].rawValue || '';
+        } else if (state.detectorMode === 'jsqr' && typeof window.jsQR === 'function') {
+          const imageData = ctx.getImageData(0, 0, cropW, cropH);
+          const result = window.jsQR(imageData.data, cropW, cropH, {
+            inversionAttempts: 'attemptBoth'
+          });
+          if (result && result.data) raw = result.data;
+        }
+
+        if (raw) {
           state.lastDetectedData = raw;
           handleQrText(raw);
         } else {
