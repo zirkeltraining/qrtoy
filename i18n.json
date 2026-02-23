@@ -1,0 +1,23 @@
+{
+  "en": {
+    "start_scanning": "Start scanning",
+    "tap_reload": "Tap here to reload",
+    "camera_label": "Select camera",
+    "camera_error": "Camera unavailable. Please allow camera access.",
+    "no_qr_support": "QR scanning is not supported in this browser."
+  },
+  "de": {
+    "start_scanning": "Scannen starten",
+    "tap_reload": "Hier tippen zum Neuladen",
+    "camera_label": "Kamera wählen",
+    "camera_error": "Kamera nicht verfügbar. Bitte Kamerazugriff erlauben.",
+    "no_qr_support": "QR-Scan wird in diesem Browser nicht unterstützt."
+  },
+  "fr": {
+    "start_scanning": "Commencer le scan",
+    "tap_reload": "Touchez ici pour recharger",
+    "camera_label": "Choisir la caméra",
+    "camera_error": "Caméra indisponible. Veuillez autoriser l'accès caméra.",
+    "no_qr_support": "Le scan de QR code n'est pas pris en charge par ce navigateur."
+  }
+}

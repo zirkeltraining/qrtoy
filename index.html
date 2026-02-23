@@ -1,0 +1,478 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>QRTOY</title>
+  <style>
+    :root {
+      --bg: #0e141b;
+      --panel: #121b24;
+      --text: #f4f7fb;
+      --muted: #b7c0cb;
+      --accent: #2dd4bf;
+      --accent-2: #38bdf8;
+      --warn: #fb7185;
+    }
+
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      background: radial-gradient(120% 120% at 20% 0%, #1c2732 0%, var(--bg) 55%, #0a1016 100%);
+      color: var(--text);
+      font-family: "Avenir Next", "Segoe UI", sans-serif;
+      overflow: hidden;
+    }
+
+    .app {
+      height: 100dvh;
+      display: grid;
+      grid-template-rows: 3fr 1fr;
+      gap: 10px;
+      padding: 10px;
+    }
+
+    .top {
+      position: relative;
+      border-radius: 18px;
+      overflow: hidden;
+      background: var(--panel);
+      border: 1px solid rgba(255,255,255,0.12);
+      min-height: 0;
+    }
+
+    iframe {
+      width: 100%;
+      height: 100%;
+      border: 0;
+      background: #0b1118;
+    }
+
+    .overlay,
+    .reload-cta {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      text-align: center;
+      padding: 16px;
+      backdrop-filter: blur(3px);
+    }
+
+    .overlay {
+      background: rgba(12,18,25,0.65);
+    }
+
+    .overlay-card,
+    .reload-card {
+      border-radius: 16px;
+      border: 1px solid rgba(255,255,255,0.2);
+      background: rgba(17,25,35,0.86);
+      padding: 18px 14px;
+      max-width: 280px;
+      width: 100%;
+    }
+
+    .icon {
+      font-size: 28px;
+      margin-bottom: 8px;
+      display: block;
+    }
+
+    .msg {
+      color: var(--text);
+      font-size: 1.06rem;
+      font-weight: 600;
+      letter-spacing: 0.01em;
+    }
+
+    .camera {
+      position: relative;
+      border-radius: 18px;
+      overflow: hidden;
+      border: 1px solid rgba(255,255,255,0.14);
+      background: #020507;
+      min-height: 0;
+    }
+
+    video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+      transform-origin: center center;
+      transition: transform 120ms linear;
+    }
+
+    .controls {
+      position: absolute;
+      left: 8px;
+      right: 8px;
+      bottom: 8px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      pointer-events: none;
+    }
+
+    .zoom-controls,
+    .camera-controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      pointer-events: auto;
+    }
+
+    button {
+      border: 1px solid rgba(255,255,255,0.3);
+      background: rgba(17,25,35,0.8);
+      color: var(--text);
+      border-radius: 999px;
+      min-width: 42px;
+      height: 42px;
+      font-size: 1rem;
+      font-weight: 700;
+      padding: 0 12px;
+    }
+
+    button:active { transform: scale(0.97); }
+
+    .zoom-pill {
+      min-width: 62px;
+      text-align: center;
+      font-size: 0.92rem;
+      font-weight: 700;
+      color: var(--muted);
+      background: rgba(17,25,35,0.84);
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.25);
+      height: 36px;
+      display: grid;
+      place-items: center;
+      padding: 0 10px;
+    }
+
+    .reload-cta {
+      display: none;
+      background: rgba(9,14,20,0.5);
+      align-items: end;
+      padding-bottom: 18px;
+    }
+
+    .reload-cta.show { display: grid; }
+
+    .reload-btn {
+      width: 100%;
+      background: linear-gradient(90deg, var(--accent), var(--accent-2));
+      color: #051014;
+      border: none;
+      font-weight: 800;
+      font-size: 1rem;
+    }
+
+    .error {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      right: 10px;
+      z-index: 5;
+      color: #ffe4e6;
+      font-size: 0.88rem;
+      background: rgba(136, 19, 55, 0.7);
+      border: 1px solid rgba(251,113,133,0.5);
+      border-radius: 10px;
+      padding: 8px 10px;
+      display: none;
+    }
+
+    canvas { display: none; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <section class="top">
+      <iframe id="viewer" title="QR target"></iframe>
+      <div class="overlay" id="startOverlay">
+        <div class="overlay-card">
+          <span class="icon">📷</span>
+          <div class="msg" id="startText">Start scanning</div>
+        </div>
+      </div>
+      <div class="reload-cta" id="reloadCta">
+        <div class="reload-card">
+          <button class="reload-btn" id="reloadBtn">Tap here to reload</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="camera">
+      <div class="error" id="errorBox"></div>
+      <video id="video" autoplay playsinline muted></video>
+      <div class="controls">
+        <div class="camera-controls">
+          <button id="cameraBtn" aria-label="Select camera">🔄</button>
+        </div>
+        <div class="zoom-controls">
+          <button id="zoomOut" aria-label="Zoom out">-</button>
+          <div class="zoom-pill" id="zoomLabel">1.0x</div>
+          <button id="zoomIn" aria-label="Zoom in">+</button>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <canvas id="scanCanvas"></canvas>
+
+  <script>
+    const els = {
+      video: document.getElementById('video'),
+      viewer: document.getElementById('viewer'),
+      startOverlay: document.getElementById('startOverlay'),
+      startText: document.getElementById('startText'),
+      reloadCta: document.getElementById('reloadCta'),
+      reloadBtn: document.getElementById('reloadBtn'),
+      zoomIn: document.getElementById('zoomIn'),
+      zoomOut: document.getElementById('zoomOut'),
+      zoomLabel: document.getElementById('zoomLabel'),
+      cameraBtn: document.getElementById('cameraBtn'),
+      errorBox: document.getElementById('errorBox'),
+      scanCanvas: document.getElementById('scanCanvas')
+    };
+
+    const state = {
+      strings: {
+        start_scanning: 'Start scanning',
+        tap_reload: 'Tap here to reload',
+        camera_label: 'Select camera',
+        camera_error: 'Camera unavailable.',
+        no_qr_support: 'QR scanning is not supported in this browser.'
+      },
+      stream: null,
+      cameras: [],
+      cameraIdx: 0,
+      zoom: 1,
+      zoomMin: 1,
+      zoomMax: 3,
+      zoomStep: 0.1,
+      detector: null,
+      scannedOnce: false,
+      lastLoadedUrl: null,
+      duplicateSeenAt: null,
+      lastDetectedData: null,
+      scanLoopId: null,
+      decoding: false
+    };
+
+    function detectLanguage(supported) {
+      const langs = (navigator.languages && navigator.languages.length) ? navigator.languages : [navigator.language || 'en'];
+      for (const lang of langs) {
+        const base = String(lang).toLowerCase().split('-')[0];
+        if (supported.includes(base)) return base;
+      }
+      return 'en';
+    }
+
+    async function loadI18n() {
+      try {
+        const resp = await fetch('./i18n.json', { cache: 'no-store' });
+        const all = await resp.json();
+        const lang = detectLanguage(Object.keys(all));
+        state.strings = { ...state.strings, ...all[lang] };
+      } catch (_) {
+        // Keep defaults when local JSON cannot be read.
+      }
+      els.startText.textContent = state.strings.start_scanning;
+      els.reloadBtn.textContent = state.strings.tap_reload;
+      els.cameraBtn.setAttribute('aria-label', state.strings.camera_label);
+    }
+
+    function showError(message) {
+      els.errorBox.textContent = message;
+      els.errorBox.style.display = 'block';
+    }
+
+    function clearError() {
+      els.errorBox.style.display = 'none';
+    }
+
+    function setZoom(next) {
+      state.zoom = Math.max(state.zoomMin, Math.min(state.zoomMax, Number(next.toFixed(2))));
+      els.video.style.transform = `scale(${state.zoom})`;
+      els.zoomLabel.textContent = `${state.zoom.toFixed(1)}x`;
+    }
+
+    function hideReloadCta() {
+      els.reloadCta.classList.remove('show');
+      state.duplicateSeenAt = null;
+    }
+
+    function isValidHttpUrl(raw) {
+      try {
+        const url = new URL(raw);
+        return url.protocol === 'http:' || url.protocol === 'https:';
+      } catch (_) {
+        return false;
+      }
+    }
+
+    async function listCameras() {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      state.cameras = devices.filter(d => d.kind === 'videoinput');
+      state.cameraIdx = Math.min(state.cameraIdx, Math.max(0, state.cameras.length - 1));
+    }
+
+    async function stopStream() {
+      if (state.stream) {
+        state.stream.getTracks().forEach(t => t.stop());
+        state.stream = null;
+      }
+    }
+
+    async function startStream(deviceId) {
+      await stopStream();
+      const constraints = {
+        audio: false,
+        video: {
+          facingMode: deviceId ? undefined : { ideal: 'environment' },
+          deviceId: deviceId ? { exact: deviceId } : undefined,
+          width: { ideal: 1280 },
+          height: { ideal: 720 }
+        }
+      };
+      state.stream = await navigator.mediaDevices.getUserMedia(constraints);
+      els.video.srcObject = state.stream;
+      await els.video.play();
+      await listCameras();
+      clearError();
+    }
+
+    async function switchCamera() {
+      if (!state.cameras.length) return;
+      state.cameraIdx = (state.cameraIdx + 1) % state.cameras.length;
+      const nextId = state.cameras[state.cameraIdx].deviceId;
+      try {
+        await startStream(nextId);
+      } catch (_) {
+        showError(state.strings.camera_error);
+      }
+    }
+
+    async function ensureDetector() {
+      if ('BarcodeDetector' in window) {
+        const supported = await window.BarcodeDetector.getSupportedFormats();
+        if (supported.includes('qr_code')) {
+          state.detector = new window.BarcodeDetector({ formats: ['qr_code'] });
+          return;
+        }
+      }
+      throw new Error('no-qr');
+    }
+
+    function loadUrl(url, forceReload = false) {
+      const nextUrl = forceReload ? `${url}${url.includes('?') ? '&' : '?'}_qrtoy_reload=${Date.now()}` : url;
+      els.viewer.src = nextUrl;
+      els.startOverlay.style.display = 'none';
+      hideReloadCta();
+      state.lastLoadedUrl = url;
+      state.scannedOnce = true;
+    }
+
+    function handleQrText(raw) {
+      if (!isValidHttpUrl(raw)) return;
+
+      if (state.lastLoadedUrl === raw) {
+        if (!state.duplicateSeenAt) state.duplicateSeenAt = performance.now();
+        const elapsed = performance.now() - state.duplicateSeenAt;
+        if (elapsed >= 2000) {
+          els.reloadCta.classList.add('show');
+        }
+        return;
+      }
+
+      loadUrl(raw, false);
+    }
+
+    async function scanLoop() {
+      if (state.decoding) {
+        state.scanLoopId = requestAnimationFrame(scanLoop);
+        return;
+      }
+
+      const vw = els.video.videoWidth;
+      const vh = els.video.videoHeight;
+      if (!vw || !vh) {
+        state.scanLoopId = requestAnimationFrame(scanLoop);
+        return;
+      }
+
+      state.decoding = true;
+      try {
+        const canvas = els.scanCanvas;
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        const cropW = Math.floor(vw / state.zoom);
+        const cropH = Math.floor(vh / state.zoom);
+        const sx = Math.floor((vw - cropW) / 2);
+        const sy = Math.floor((vh - cropH) / 2);
+        canvas.width = cropW;
+        canvas.height = cropH;
+        ctx.drawImage(els.video, sx, sy, cropW, cropH, 0, 0, cropW, cropH);
+
+        const box = state.detector ? await state.detector.detect(canvas) : [];
+        if (box.length) {
+          const raw = box[0].rawValue || '';
+          state.lastDetectedData = raw;
+          handleQrText(raw);
+        } else {
+          state.duplicateSeenAt = null;
+          if (!state.scannedOnce) {
+            els.startOverlay.style.display = 'grid';
+          }
+        }
+      } catch (_) {
+        // Ignore intermittent decode issues.
+      } finally {
+        state.decoding = false;
+        state.scanLoopId = requestAnimationFrame(scanLoop);
+      }
+    }
+
+    async function init() {
+      await loadI18n();
+      setZoom(1);
+
+      els.zoomIn.addEventListener('click', () => setZoom(state.zoom + state.zoomStep));
+      els.zoomOut.addEventListener('click', () => setZoom(state.zoom - state.zoomStep));
+      els.cameraBtn.addEventListener('click', switchCamera);
+      els.reloadBtn.addEventListener('click', () => {
+        if (state.lastLoadedUrl) loadUrl(state.lastLoadedUrl, true);
+      });
+
+      try {
+        await ensureDetector();
+      } catch (_) {
+        showError(state.strings.no_qr_support);
+        return;
+      }
+
+      try {
+        await startStream();
+      } catch (_) {
+        showError(state.strings.camera_error);
+        return;
+      }
+
+      if (state.scanLoopId) cancelAnimationFrame(state.scanLoopId);
+      state.scanLoopId = requestAnimationFrame(scanLoop);
+    }
+
+    window.addEventListener('beforeunload', stopStream);
+    window.addEventListener('pagehide', stopStream);
+
+    init();
+  </script>
+</body>
+</html>
