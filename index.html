@@ -63,7 +63,7 @@
       width: 100%;
       height: 100%;
       border: 0;
-      background: #0b1118;
+      background: #8a8f98;
     }
 
     .overlay,
@@ -135,13 +135,12 @@
       right: 8px;
       bottom: 8px;
       display: flex;
-      justify-content: space-between;
+      justify-content: flex-start;
       align-items: center;
       gap: 10px;
       pointer-events: none;
     }
 
-    .zoom-controls,
     .camera-controls {
       display: flex;
       align-items: center;
@@ -163,19 +162,45 @@
 
     button:active { transform: scale(0.97); }
 
-    .zoom-pill {
-      min-width: 62px;
-      text-align: center;
-      font-size: 0.92rem;
-      font-weight: 700;
-      color: var(--muted);
-      background: rgba(17,25,35,0.84);
+    .zoom-rail {
+      position: absolute;
+      top: 10%;
+      right: 8px;
+      width: 56px;
+      height: 80%;
+      pointer-events: auto;
+      z-index: 7;
+      touch-action: none;
+    }
+
+    .zoom-track {
+      position: absolute;
+      top: 0;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 8px;
+      height: 100%;
       border-radius: 999px;
+      background: rgba(17,25,35,0.7);
       border: 1px solid rgba(255,255,255,0.25);
-      height: 36px;
+    }
+
+    .zoom-thumb {
+      position: absolute;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      min-width: 50px;
+      height: 30px;
+      padding: 0 8px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.35);
+      background: rgba(56,189,248,0.88);
+      color: #04121c;
       display: grid;
       place-items: center;
-      padding: 0 10px;
+      font-size: 0.84rem;
+      font-weight: 800;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.28);
     }
 
     .reload-cta {
@@ -211,7 +236,7 @@
       display: none;
     }
 
-    canvas { display: none; }
+    #scanCanvas { display: none; }
   </style>
 </head>
 <body>
@@ -240,16 +265,16 @@
         <div class="camera-controls">
           <button id="cameraBtn" aria-label="Select camera">🔄</button>
         </div>
-        <div class="zoom-controls">
-          <button id="zoomOut" aria-label="Zoom out">-</button>
-          <div class="zoom-pill" id="zoomLabel">1.0x</div>
-          <button id="zoomIn" aria-label="Zoom in">+</button>
-        </div>
+      </div>
+      <div class="zoom-rail" id="zoomRail" aria-label="Zoom control">
+        <div class="zoom-track"></div>
+        <div class="zoom-thumb" id="zoomThumb">1.0x</div>
       </div>
     </section>
   </div>
 
   <canvas id="scanCanvas"></canvas>
+  <audio id="triggerAudio" src="./trigger.mp3" preload="auto"></audio>
 
   <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
   <script>
@@ -260,13 +285,13 @@
       startText: document.getElementById('startText'),
       reloadCta: document.getElementById('reloadCta'),
       reloadBtn: document.getElementById('reloadBtn'),
-      zoomIn: document.getElementById('zoomIn'),
-      zoomOut: document.getElementById('zoomOut'),
-      zoomLabel: document.getElementById('zoomLabel'),
+      zoomRail: document.getElementById('zoomRail'),
+      zoomThumb: document.getElementById('zoomThumb'),
       cameraBtn: document.getElementById('cameraBtn'),
       errorBox: document.getElementById('errorBox'),
       scanCanvas: document.getElementById('scanCanvas'),
-      flashCanvas: document.getElementById('flashCanvas')
+      flashCanvas: document.getElementById('flashCanvas'),
+      triggerAudio: document.getElementById('triggerAudio')
     };
 
     const state = {
@@ -293,8 +318,11 @@
       scanLoopId: null,
       decoding: false,
       feedbackUntil: 0,
+      feedbackRect: null,
       audioCtx: null,
-      audioReady: false
+      audioReady: false,
+      fileAudioReady: false,
+      zoomDragging: false
     };
 
     function detectLanguage(supported) {
@@ -349,9 +377,16 @@
       state.audioCtx.resume().then(() => {
         state.audioReady = true;
       }).catch(() => {});
+      els.triggerAudio.play().then(() => {
+        els.triggerAudio.pause();
+        els.triggerAudio.currentTime = 0;
+        state.fileAudioReady = true;
+      }).catch(() => {
+        state.fileAudioReady = false;
+      });
     }
 
-    function playShutterSound() {
+    function playSynthShutterSound() {
       if (!state.audioCtx || !state.audioReady) return;
       const ctx = state.audioCtx;
       const now = ctx.currentTime;
@@ -383,40 +418,102 @@
       noise.stop(now + 0.04);
     }
 
-    function drawFeedbackPolygon(points) {
+    function playShutterSound() {
+      if (state.fileAudioReady) {
+        els.triggerAudio.currentTime = 0;
+        els.triggerAudio.play().catch(() => {
+          playSynthShutterSound();
+        });
+        return;
+      }
+      playSynthShutterSound();
+    }
+
+    function mapVideoPointToFlashCanvas(pt) {
+      const dpr = Math.max(1, window.devicePixelRatio || 1);
+      const cw = els.flashCanvas.width / dpr;
+      const ch = els.flashCanvas.height / dpr;
+      const vw = els.video.videoWidth;
+      const vh = els.video.videoHeight;
+      const fit = Math.max(cw / vw, ch / vh);
+      const rw = vw * fit;
+      const rh = vh * fit;
+      const ox = (cw - rw) / 2;
+      const oy = (ch - rh) / 2;
+      const baseX = ox + (pt.x * fit);
+      const baseY = oy + (pt.y * fit);
+      return {
+        x: ((baseX - (cw / 2)) * state.zoom) + (cw / 2),
+        y: ((baseY - (ch / 2)) * state.zoom) + (ch / 2)
+      };
+    }
+
+    function setFeedbackRect(points) {
       if (!points || points.length < 4) return;
       ensureFeedbackCanvasSize();
-      const ctx = els.flashCanvas.getContext('2d');
-      const w = els.flashCanvas.width;
-      const h = els.flashCanvas.height;
-      const dpr = Math.max(1, window.devicePixelRatio || 1);
-      const sx = w / dpr;
-      const sy = h / dpr;
-      ctx.clearRect(0, 0, w, h);
-      ctx.fillStyle = 'rgba(255,255,255,0.55)';
-      ctx.beginPath();
-      for (let i = 0; i < points.length; i += 1) {
-        const px = (points[i].x / els.video.videoWidth) * sx * dpr;
-        const py = (points[i].y / els.video.videoHeight) * sy * dpr;
-        if (i === 0) ctx.moveTo(px, py);
-        else ctx.lineTo(px, py);
-      }
-      ctx.closePath();
-      ctx.fill();
-      state.feedbackUntil = performance.now() + 110;
+      const mapped = points.map(mapVideoPointToFlashCanvas);
+      const xs = mapped.map(p => p.x);
+      const ys = mapped.map(p => p.y);
+      state.feedbackRect = {
+        x: Math.min(...xs),
+        y: Math.min(...ys),
+        w: Math.max(...xs) - Math.min(...xs),
+        h: Math.max(...ys) - Math.min(...ys)
+      };
+      state.feedbackUntil = performance.now() + 260;
       playShutterSound();
     }
 
+    function roundedRectPath(ctx, x, y, w, h, r) {
+      const rr = Math.max(4, Math.min(r, w / 3, h / 3));
+      ctx.beginPath();
+      ctx.moveTo(x + rr, y);
+      ctx.arcTo(x + w, y, x + w, y + h, rr);
+      ctx.arcTo(x + w, y + h, x, y + h, rr);
+      ctx.arcTo(x, y + h, x, y, rr);
+      ctx.arcTo(x, y, x + w, y, rr);
+      ctx.closePath();
+    }
+
     function renderFeedback() {
-      if (performance.now() <= state.feedbackUntil) return;
       const ctx = els.flashCanvas.getContext('2d');
+      ensureFeedbackCanvasSize();
       ctx.clearRect(0, 0, els.flashCanvas.width, els.flashCanvas.height);
+      if (performance.now() > state.feedbackUntil || !state.feedbackRect) return;
+      const dpr = Math.max(1, window.devicePixelRatio || 1);
+      const t = performance.now();
+      const pulse = Math.sin(t / 30) > 0 ? 1 : 0.45;
+      const x = state.feedbackRect.x * dpr;
+      const y = state.feedbackRect.y * dpr;
+      const w = state.feedbackRect.w * dpr;
+      const h = state.feedbackRect.h * dpr;
+      roundedRectPath(ctx, x, y, w, h, 12 * dpr);
+      ctx.fillStyle = `rgba(255,255,255,${0.12 * pulse})`;
+      ctx.fill();
+      ctx.lineWidth = 3 * dpr;
+      ctx.strokeStyle = `rgba(255,255,255,${0.95 * pulse})`;
+      ctx.stroke();
     }
 
     function setZoom(next) {
       state.zoom = Math.max(state.zoomMin, Math.min(state.zoomMax, Number(next.toFixed(2))));
       els.video.style.transform = `scale(${state.zoom})`;
-      els.zoomLabel.textContent = `${state.zoom.toFixed(1)}x`;
+      els.zoomThumb.textContent = `${state.zoom.toFixed(1)}x`;
+      updateZoomThumbPosition();
+    }
+
+    function updateZoomThumbPosition() {
+      const ratio = (state.zoom - state.zoomMin) / (state.zoomMax - state.zoomMin);
+      const y = (1 - ratio) * 100;
+      els.zoomThumb.style.top = `${y}%`;
+    }
+
+    function setZoomFromRail(clientY) {
+      const rect = els.zoomRail.getBoundingClientRect();
+      const rel = Math.max(0, Math.min(1, (clientY - rect.top) / rect.height));
+      const ratio = 1 - rel;
+      const next = state.zoomMin + (ratio * (state.zoomMax - state.zoomMin));
+      setZoom(next);
     }
 
     function hideReloadCta() {
@@ -574,7 +671,7 @@
         if (raw) {
           state.lastDetectedData = raw;
           const didStartLoad = handleQrText(raw);
-          if (didStartLoad && points) drawFeedbackPolygon(points);
+          if (didStartLoad && points) setFeedbackRect(points);
         } else {
           state.duplicateSeenAt = null;
           if (!state.scannedOnce) {
@@ -594,11 +691,20 @@
       await loadI18n();
       setZoom(1);
 
-      els.zoomIn.addEventListener('click', () => setZoom(state.zoom + state.zoomStep));
-      els.zoomOut.addEventListener('click', () => setZoom(state.zoom - state.zoomStep));
       els.cameraBtn.addEventListener('click', switchCamera);
       window.addEventListener('pointerdown', unlockAudio, { once: true });
       window.addEventListener('touchstart', unlockAudio, { once: true });
+      els.zoomRail.addEventListener('pointerdown', (e) => {
+        state.zoomDragging = true;
+        setZoomFromRail(e.clientY);
+      });
+      window.addEventListener('pointermove', (e) => {
+        if (!state.zoomDragging) return;
+        setZoomFromRail(e.clientY);
+      });
+      window.addEventListener('pointerup', () => {
+        state.zoomDragging = false;
+      });
       els.reloadBtn.addEventListener('click', () => {
         if (state.lastLoadedUrl) loadUrl(state.lastLoadedUrl, true);
       });
