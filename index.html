@@ -113,6 +113,16 @@
       min-height: 0;
     }
 
+    .camera.flash-trigger {
+      animation: cameraBorderFlash 240ms ease-out;
+    }
+
+    @keyframes cameraBorderFlash {
+      0% { box-shadow: 0 0 0 0 rgba(255,255,255,0.1), inset 0 0 0 1px rgba(255,255,255,0.2); border-color: rgba(255,255,255,0.35); }
+      35% { box-shadow: 0 0 0 6px rgba(255,255,255,0.65), inset 0 0 0 2px rgba(255,255,255,0.95); border-color: rgba(255,255,255,1); }
+      100% { box-shadow: 0 0 0 0 rgba(255,255,255,0), inset 0 0 0 1px rgba(255,255,255,0); border-color: rgba(255,255,255,0.14); }
+    }
+
     video {
       width: 100%;
       height: 100%;
@@ -120,13 +130,6 @@
       display: block;
       transform-origin: center center;
       transition: transform 120ms linear;
-    }
-
-    .flash-overlay {
-      position: absolute;
-      inset: 0;
-      pointer-events: none;
-      z-index: 4;
     }
 
     .controls {
@@ -236,6 +239,26 @@
       display: none;
     }
 
+    .scan-gate {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      z-index: 8;
+      background: rgba(2, 5, 7, 0.58);
+      backdrop-filter: blur(2px);
+    }
+
+    .scan-gate button {
+      min-width: 180px;
+      height: 48px;
+      font-size: 0.98rem;
+      font-weight: 800;
+      border: none;
+      background: linear-gradient(90deg, var(--accent), var(--accent-2));
+      color: #051014;
+    }
+
     #scanCanvas { display: none; }
   </style>
 </head>
@@ -257,10 +280,12 @@
       </div>
     </section>
 
-    <section class="camera">
+    <section class="camera" id="cameraPane">
       <div class="error" id="errorBox"></div>
       <video id="video" autoplay playsinline muted></video>
-      <canvas id="flashCanvas" class="flash-overlay"></canvas>
+      <div class="scan-gate" id="scanGate">
+        <button id="startScanBtn">Start scanning</button>
+      </div>
       <div class="controls">
         <div class="camera-controls">
           <button id="cameraBtn" aria-label="Select camera">🔄</button>
@@ -285,12 +310,14 @@
       startText: document.getElementById('startText'),
       reloadCta: document.getElementById('reloadCta'),
       reloadBtn: document.getElementById('reloadBtn'),
+      cameraPane: document.getElementById('cameraPane'),
+      scanGate: document.getElementById('scanGate'),
+      startScanBtn: document.getElementById('startScanBtn'),
       zoomRail: document.getElementById('zoomRail'),
       zoomThumb: document.getElementById('zoomThumb'),
       cameraBtn: document.getElementById('cameraBtn'),
       errorBox: document.getElementById('errorBox'),
       scanCanvas: document.getElementById('scanCanvas'),
-      flashCanvas: document.getElementById('flashCanvas'),
       triggerAudio: document.getElementById('triggerAudio')
     };
 
@@ -317,8 +344,7 @@
       lastDetectedData: null,
       scanLoopId: null,
       decoding: false,
-      feedbackUntil: 0,
-      feedbackRect: null,
+      feedbackTimer: null,
       audioCtx: null,
       audioReady: false,
       fileAudioReady: false,
@@ -344,6 +370,7 @@
         // Keep defaults when local JSON cannot be read.
       }
       els.startText.textContent = state.strings.start_scanning;
+      els.startScanBtn.textContent = state.strings.start_scanning;
       els.reloadBtn.textContent = state.strings.tap_reload;
       els.cameraBtn.setAttribute('aria-label', state.strings.camera_label);
     }
@@ -355,17 +382,6 @@
 
     function clearError() {
       els.errorBox.style.display = 'none';
-    }
-
-    function ensureFeedbackCanvasSize() {
-      const rect = els.video.getBoundingClientRect();
-      const dpr = Math.max(1, window.devicePixelRatio || 1);
-      const targetW = Math.max(1, Math.floor(rect.width * dpr));
-      const targetH = Math.max(1, Math.floor(rect.height * dpr));
-      if (els.flashCanvas.width !== targetW || els.flashCanvas.height !== targetH) {
-        els.flashCanvas.width = targetW;
-        els.flashCanvas.height = targetH;
-      }
     }
 
     function unlockAudio() {
@@ -429,70 +445,20 @@
       playSynthShutterSound();
     }
 
-    function mapVideoPointToFlashCanvas(pt) {
-      const dpr = Math.max(1, window.devicePixelRatio || 1);
-      const cw = els.flashCanvas.width / dpr;
-      const ch = els.flashCanvas.height / dpr;
-      const vw = els.video.videoWidth;
-      const vh = els.video.videoHeight;
-      const fit = Math.max(cw / vw, ch / vh);
-      const rw = vw * fit;
-      const rh = vh * fit;
-      const ox = (cw - rw) / 2;
-      const oy = (ch - rh) / 2;
-      const baseX = ox + (pt.x * fit);
-      const baseY = oy + (pt.y * fit);
-      return {
-        x: ((baseX - (cw / 2)) * state.zoom) + (cw / 2),
-        y: ((baseY - (ch / 2)) * state.zoom) + (ch / 2)
-      };
-    }
-
-    function setFeedbackRect(points) {
-      if (!points || points.length < 4) return;
-      ensureFeedbackCanvasSize();
-      const mapped = points.map(mapVideoPointToFlashCanvas);
-      const xs = mapped.map(p => p.x);
-      const ys = mapped.map(p => p.y);
-      state.feedbackRect = {
-        x: Math.min(...xs),
-        y: Math.min(...ys),
-        w: Math.max(...xs) - Math.min(...xs),
-        h: Math.max(...ys) - Math.min(...ys)
-      };
-      state.feedbackUntil = performance.now() + 260;
+    function triggerScanFeedback() {
+      if (state.feedbackTimer) {
+        clearTimeout(state.feedbackTimer);
+        state.feedbackTimer = null;
+      }
+      els.cameraPane.classList.remove('flash-trigger');
+      // Force reflow so the animation can retrigger rapidly.
+      void els.cameraPane.offsetWidth;
+      els.cameraPane.classList.add('flash-trigger');
+      state.feedbackTimer = setTimeout(() => {
+        els.cameraPane.classList.remove('flash-trigger');
+        state.feedbackTimer = null;
+      }, 260);
       playShutterSound();
-    }
-
-    function roundedRectPath(ctx, x, y, w, h, r) {
-      const rr = Math.max(4, Math.min(r, w / 3, h / 3));
-      ctx.beginPath();
-      ctx.moveTo(x + rr, y);
-      ctx.arcTo(x + w, y, x + w, y + h, rr);
-      ctx.arcTo(x + w, y + h, x, y + h, rr);
-      ctx.arcTo(x, y + h, x, y, rr);
-      ctx.arcTo(x, y, x + w, y, rr);
-      ctx.closePath();
-    }
-
-    function renderFeedback() {
-      const ctx = els.flashCanvas.getContext('2d');
-      ensureFeedbackCanvasSize();
-      ctx.clearRect(0, 0, els.flashCanvas.width, els.flashCanvas.height);
-      if (performance.now() > state.feedbackUntil || !state.feedbackRect) return;
-      const dpr = Math.max(1, window.devicePixelRatio || 1);
-      const t = performance.now();
-      const pulse = Math.sin(t / 30) > 0 ? 1 : 0.45;
-      const x = state.feedbackRect.x * dpr;
-      const y = state.feedbackRect.y * dpr;
-      const w = state.feedbackRect.w * dpr;
-      const h = state.feedbackRect.h * dpr;
-      roundedRectPath(ctx, x, y, w, h, 12 * dpr);
-      ctx.fillStyle = `rgba(255,255,255,${0.12 * pulse})`;
-      ctx.fill();
-      ctx.lineWidth = 3 * dpr;
-      ctx.strokeStyle = `rgba(255,255,255,${0.95 * pulse})`;
-      ctx.stroke();
     }
 
     function setZoom(next) {
@@ -639,14 +605,10 @@
         ctx.drawImage(els.video, sx, sy, cropW, cropH, 0, 0, cropW, cropH);
 
         let raw = '';
-        let points = null;
         if (state.detectorMode === 'native' && state.detector) {
           const box = await state.detector.detect(canvas);
           if (box.length) {
             raw = box[0].rawValue || '';
-            if (box[0].cornerPoints && box[0].cornerPoints.length === 4) {
-              points = box[0].cornerPoints;
-            }
           }
         } else if (state.detectorMode === 'jsqr' && typeof window.jsQR === 'function') {
           const imageData = ctx.getImageData(0, 0, cropW, cropH);
@@ -655,23 +617,13 @@
           });
           if (result && result.data) {
             raw = result.data;
-            if (result.location) {
-              const mapX = p => sx + p.x;
-              const mapY = p => sy + p.y;
-              points = [
-                { x: mapX(result.location.topLeftCorner), y: mapY(result.location.topLeftCorner) },
-                { x: mapX(result.location.topRightCorner), y: mapY(result.location.topRightCorner) },
-                { x: mapX(result.location.bottomRightCorner), y: mapY(result.location.bottomRightCorner) },
-                { x: mapX(result.location.bottomLeftCorner), y: mapY(result.location.bottomLeftCorner) }
-              ];
-            }
           }
         }
 
         if (raw) {
           state.lastDetectedData = raw;
           const didStartLoad = handleQrText(raw);
-          if (didStartLoad && points) setFeedbackRect(points);
+          if (didStartLoad) triggerScanFeedback();
         } else {
           state.duplicateSeenAt = null;
           if (!state.scannedOnce) {
@@ -681,10 +633,32 @@
       } catch (_) {
         // Ignore intermittent decode issues.
       } finally {
-        renderFeedback();
         state.decoding = false;
         state.scanLoopId = requestAnimationFrame(scanLoop);
       }
+    }
+
+    async function startScanning() {
+      unlockAudio();
+      try {
+        await ensureDetector();
+      } catch (_) {
+        showError(state.strings.no_qr_support);
+        els.scanGate.style.display = 'grid';
+        return;
+      }
+
+      try {
+        await startStream();
+      } catch (_) {
+        showError(state.strings.camera_error);
+        els.scanGate.style.display = 'grid';
+        return;
+      }
+      els.scanGate.style.display = 'none';
+
+      if (state.scanLoopId) cancelAnimationFrame(state.scanLoopId);
+      state.scanLoopId = requestAnimationFrame(scanLoop);
     }
 
     async function init() {
@@ -692,8 +666,7 @@
       setZoom(1);
 
       els.cameraBtn.addEventListener('click', switchCamera);
-      window.addEventListener('pointerdown', unlockAudio, { once: true });
-      window.addEventListener('touchstart', unlockAudio, { once: true });
+      els.startScanBtn.addEventListener('click', startScanning);
       els.zoomRail.addEventListener('pointerdown', (e) => {
         state.zoomDragging = true;
         setZoomFromRail(e.clientY);
@@ -708,23 +681,6 @@
       els.reloadBtn.addEventListener('click', () => {
         if (state.lastLoadedUrl) loadUrl(state.lastLoadedUrl, true);
       });
-
-      try {
-        await ensureDetector();
-      } catch (_) {
-        showError(state.strings.no_qr_support);
-        return;
-      }
-
-      try {
-        await startStream();
-      } catch (_) {
-        showError(state.strings.camera_error);
-        return;
-      }
-
-      if (state.scanLoopId) cancelAnimationFrame(state.scanLoopId);
-      state.scanLoopId = requestAnimationFrame(scanLoop);
     }
 
     window.addEventListener('beforeunload', stopStream);
