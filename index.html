@@ -107,6 +107,14 @@
       letter-spacing: 0.01em;
     }
 
+    .overlay-title {
+      color: rgba(244, 247, 251, 0.92);
+      font-size: 0.9rem;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
     .camera {
       position: relative;
       border-radius: 18px;
@@ -116,20 +124,19 @@
       min-height: 0;
     }
 
-    .camera::after {
-      content: "";
+    .camera-flash {
       position: absolute;
       inset: 0;
       pointer-events: none;
       background: rgba(255,255,255,0);
-      z-index: 5;
+      z-index: 30;
     }
 
     .camera.flash-trigger {
       animation: cameraBorderFlash 260ms ease-out;
     }
 
-    .camera.flash-trigger::after {
+    .camera-flash.flash-trigger {
       animation: cameraFullFlash 210ms ease-out;
     }
 
@@ -303,7 +310,7 @@
       <div class="overlay" id="startOverlay">
         <div class="overlay-card">
           <span class="icon">📷</span>
-          <div class="msg" id="startText">Start scanning</div>
+          <div class="overlay-title">QRTOY V0.1 BY MAX</div>
         </div>
       </div>
       <div class="reload-cta" id="reloadCta">
@@ -316,6 +323,7 @@
     <section class="camera" id="cameraPane">
       <div class="error" id="errorBox"></div>
       <video id="video" autoplay playsinline muted></video>
+      <div id="cameraFlash" class="camera-flash"></div>
       <div class="scan-gate" id="scanGate">
         <button id="startScanBtn">Start scanning</button>
       </div>
@@ -340,12 +348,12 @@
       video: document.getElementById('video'),
       viewer: document.getElementById('viewer'),
       startOverlay: document.getElementById('startOverlay'),
-      startText: document.getElementById('startText'),
       reloadCta: document.getElementById('reloadCta'),
       reloadBtn: document.getElementById('reloadBtn'),
       cameraPane: document.getElementById('cameraPane'),
       scanGate: document.getElementById('scanGate'),
       startScanBtn: document.getElementById('startScanBtn'),
+      cameraFlash: document.getElementById('cameraFlash'),
       zoomRail: document.getElementById('zoomRail'),
       zoomThumb: document.getElementById('zoomThumb'),
       cameraBtn: document.getElementById('cameraBtn'),
@@ -375,6 +383,7 @@
       lastLoadedUrl: null,
       duplicateSeenAt: null,
       lastDuplicateFrameAt: null,
+      duplicateCandidateUrl: null,
       lastDetectedData: null,
       scanLoopId: null,
       decoding: false,
@@ -403,7 +412,6 @@
       } catch (_) {
         // Keep defaults when local JSON cannot be read.
       }
-      els.startText.textContent = state.strings.start_scanning;
       els.startScanBtn.textContent = state.strings.start_scanning;
       els.reloadBtn.textContent = state.strings.tap_reload;
       els.cameraBtn.setAttribute('aria-label', state.strings.camera_label);
@@ -485,11 +493,15 @@
         state.feedbackTimer = null;
       }
       els.cameraPane.classList.remove('flash-trigger');
+      els.cameraFlash.classList.remove('flash-trigger');
       // Force reflow so the animation can retrigger rapidly.
       void els.cameraPane.offsetWidth;
+      void els.cameraFlash.offsetWidth;
       els.cameraPane.classList.add('flash-trigger');
+      els.cameraFlash.classList.add('flash-trigger');
       state.feedbackTimer = setTimeout(() => {
         els.cameraPane.classList.remove('flash-trigger');
+        els.cameraFlash.classList.remove('flash-trigger');
         state.feedbackTimer = null;
       }, 260);
       if (navigator.vibrate) navigator.vibrate(45);
@@ -521,6 +533,7 @@
       els.reloadCta.classList.remove('show');
       state.duplicateSeenAt = null;
       state.lastDuplicateFrameAt = null;
+      state.duplicateCandidateUrl = null;
     }
 
     function isValidHttpUrl(raw) {
@@ -529,6 +542,16 @@
         return url.protocol === 'http:' || url.protocol === 'https:';
       } catch (_) {
         return false;
+      }
+    }
+
+    function normalizeHttpUrl(raw) {
+      try {
+        const url = new URL(String(raw).trim());
+        if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
+        return url.href;
+      } catch (_) {
+        return null;
       }
     }
 
@@ -600,9 +623,14 @@
     }
 
     function handleQrText(raw) {
-      if (!isValidHttpUrl(raw)) return false;
+      const normalized = normalizeHttpUrl(raw);
+      if (!normalized) return false;
 
-      if (state.lastLoadedUrl === raw) {
+      if (state.lastLoadedUrl === normalized) {
+        if (state.duplicateCandidateUrl !== normalized) {
+          state.duplicateCandidateUrl = normalized;
+          state.duplicateSeenAt = performance.now();
+        }
         if (!state.duplicateSeenAt) state.duplicateSeenAt = performance.now();
         state.lastDuplicateFrameAt = performance.now();
         const elapsed = performance.now() - state.duplicateSeenAt;
@@ -612,7 +640,8 @@
         return false;
       }
 
-      loadUrl(raw, false);
+      state.duplicateCandidateUrl = null;
+      loadUrl(normalized, false);
       return true;
     }
 
@@ -662,9 +691,10 @@
           const didStartLoad = handleQrText(raw);
           if (didStartLoad) triggerScanFeedback();
         } else {
-          if (state.lastDuplicateFrameAt && (performance.now() - state.lastDuplicateFrameAt) > 450) {
+          if (state.lastDuplicateFrameAt && (performance.now() - state.lastDuplicateFrameAt) > 1200) {
             state.duplicateSeenAt = null;
             state.lastDuplicateFrameAt = null;
+            state.duplicateCandidateUrl = null;
           }
           if (!state.scannedOnce) {
             els.startOverlay.style.display = 'grid';
